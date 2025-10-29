@@ -3,15 +3,17 @@
 ## Overview
 This plan outlines the implementation of a fully automated employee termination workflow in n8n that processes terminations via webhook input (employee name or ID), converts M365 mailboxes to shared mailboxes with supervisor access, removes licenses, disables Active Directory accounts, moves them to a disabled OU, and removes all group memberships—all without human intervention.
 
+**Long-term Vision**: This workflow will serve as a **subflow** called by an AI-powered email handler that automatically detects termination requests from emails, extracts relevant information, and triggers the termination process.
+
 ## Implementation Approach
 
-**⚡ PROGRAMMATIC WORKFLOW CREATION**
+**⚡ PROGRAMMATIC WORKFLOW CREATION VIA N8N MCP SERVER**
 
 This workflow will be created **programmatically** using the n8n MCP server tools, not manually in the n8n UI. The implementation will:
 
 1. **Use n8n MCP Tools**: Leverage `mcp__n8n-mcp__n8n_create_workflow` to generate the complete workflow
 2. **Generate Workflow JSON**: Programmatically construct nodes, connections, and configurations
-3. **Validate Configuration**: Use `mcp__n8n-mcp__validate_workflow` before creation
+3. **Validate Configuration**: Use `mcp__n8n-mcp__n8n_validate_workflow` before creation
 4. **Prerequisites Required**: User must complete Azure AD setup and n8n credentials configuration before workflow creation
 
 **Implementation Flow**:
@@ -32,6 +34,68 @@ User Completes Prerequisites → AI Creates Workflow via MCP → Workflow Ready 
 - ✅ Create the workflow in your n8n instance
 
 This approach ensures consistency, reduces manual configuration errors, and provides a reproducible workflow deployment.
+
+---
+
+## n8n MCP Server Implementation Guide
+
+**CRITICAL**: All workflow creation and modification will be done programmatically using the n8n MCP server tools. Manual UI editing should be avoided.
+
+### MCP Tools Used
+
+**Workflow Management:**
+- `mcp__n8n-mcp__n8n_create_workflow` - Create initial workflow
+- `mcp__n8n-mcp__n8n_update_partial_workflow` - Add/update/remove nodes and connections
+- `mcp__n8n-mcp__n8n_get_workflow` - Retrieve workflow for inspection
+- `mcp__n8n-mcp__n8n_validate_workflow` - Validate workflow before activation
+- `mcp__n8n-mcp__list_workflows` - List all workflows
+
+**Node Operations (via update_partial_workflow):**
+- `addNode` - Add a new node to the workflow
+- `updateNode` - Modify existing node configuration
+- `removeNode` - Remove a node
+- `addConnection` - Connect two nodes
+- `removeConnection` - Disconnect nodes
+- `enableNode` / `disableNode` - Toggle node active state
+
+**Execution Testing:**
+- `mcp__n8n-mcp__n8n_trigger_webhook_workflow` - Test webhook trigger
+- `mcp__n8n-mcp__n8n_get_execution` - Get execution results
+- `mcp__n8n-mcp__n8n_list_executions` - List workflow executions
+
+### Development Workflow
+
+1. **Create** → Use `n8n_create_workflow` with empty nodes array
+2. **Add Nodes** → Use `n8n_update_partial_workflow` with `addNode` operations
+3. **Connect Nodes** → Use `n8n_update_partial_workflow` with `addConnection` operations
+4. **Validate** → Use `n8n_validate_workflow` to check for errors
+5. **Test** → Use `n8n_trigger_webhook_workflow` for testing
+6. **Activate** → Use `n8n_update_partial_workflow` with `updateSettings` to set `active: true`
+
+### Node Type Reference
+
+For this workflow, we'll use:
+- `n8n-nodes-base.webhook` (typeVersion 2) - Webhook trigger
+- `n8n-nodes-base.code` (typeVersion 2) - JavaScript/Python code execution
+- `n8n-nodes-base.executeCommand` (typeVersion 1) - PowerShell execution
+- `n8n-nodes-base.respondToWebhook` (typeVersion 1) - HTTP responses
+- `n8n-nodes-base.httpRequest` (typeVersion 4.3+) - Microsoft Graph API calls
+- `n8n-nodes-base.ldap` (typeVersion 1+) - Active Directory operations
+
+**Before starting implementation, verify n8n MCP server is connected:**
+```bash
+# Use this to check n8n connectivity
+mcp__n8n-mcp__n8n_health_check()
+```
+
+### MCP Implementation Pattern for Each Task
+
+Throughout the implementation tasks below, you'll see references to:
+- **MCP Tool**: Which n8n MCP tool to use
+- **Operation Type**: The operation to perform (addNode, addConnection, etc.)
+- **Node Configuration**: The complete node definition
+
+This ensures the entire workflow is created programmatically without manual UI interaction.
 
 ## Requirements Summary
 - **Trigger**: Accept employee name or employee ID via webhook
@@ -233,6 +297,129 @@ This approach ensures consistency, reduces manual configuration errors, and prov
 
 ### Reference Implementations
 
+**Working PowerShell Script - Complete Employee Termination**:
+```powershell
+# Requires: Microsoft.Graph and ExchangeOnlineManagement modules
+# Make sure to run PowerShell as Administrator
+
+#-----------------------------
+# CONFIGURATION SECTION
+#-----------------------------
+$adminUPN = "iiadminRC@INSULATIONSINC1.onmicrosoft.com"
+$employeeIDs = @("785389")#, "974320", "445386")
+$disabledOU = "OU=Disabled Users,DC=insulationsinc,DC=local"
+$tenantId = "953922e6-5370-4a01-a3d5-773a30df726b"
+$organizationDomain = "ii-us.com"
+$appId = "73b82823-d860-4bf6-938b-74deabeebab7"
+$certThumbprint = "DE0FF14C5EABA90BA328030A59662518A3673009"
+
+#-----------------------------
+# AUTHENTICATION SECTION
+#-----------------------------
+Write-Host "Connecting to Microsoft Graph..."
+Connect-MgGraph -ClientId $appId -TenantId $tenantId -CertificateThumbprint $certThumbprint -NoWelcome
+
+Write-Host "Connecting to Exchange Online..."
+Connect-ExchangeOnline -AppId $appId -Organization $organizationDomain -CertificateThumbprint $certThumbprint
+
+#-----------------------------
+# PROCESSING EACH EMPLOYEE
+#-----------------------------
+foreach ($empID in $employeeIDs) {
+    Write-Host "Processing Employee ID: $empID"
+
+    # Find user in local AD
+    $user = Get-ADUser -Filter {employeeID -eq $empID} -Properties EmployeeID, DistinguishedName, UserPrincipalName
+
+    if (-not $user) {
+        Write-Warning "User with Employee ID $empID not found in AD. Skipping."
+        continue
+    }
+
+    $upn = $user.UserPrincipalName
+    Write-Host "Found AD user: $upn"
+
+    # Find user in Azure AD via Microsoft Graph
+    try {
+        $graphUser = Get-MgUser -Filter "userPrincipalName eq '$upn'"
+    } catch {
+        Write-Warning "Failed to find $upn in Azure AD: $_"
+        continue
+    }
+
+    if (-not $graphUser) {
+        Write-Warning "No matching Azure AD user found for $upn. Skipping license removal."
+    } else {
+        # Remove all licenses
+        try {
+            Write-Host "Fetching assigned licenses for $upn..."
+            $licenseDetails = Get-MgUserLicenseDetail -UserId $graphUser.Id
+            $licensesToRemove = @()
+
+            foreach ($license in $licenseDetails) {
+                $licensesToRemove += $license.SkuId
+            }
+
+            if ($licensesToRemove.Count -gt 0) {
+                Write-Host "Removing licenses from $upn..."
+                Set-MgUserLicense -UserId $graphUser.Id -RemoveLicenses $licensesToRemove -AddLicenses @{}
+            } else {
+                Write-Host "No licenses assigned to $upn."
+            }
+        } catch {
+            Write-Warning "Failed to remove licenses for $upn $_"
+        }
+    }
+
+    # Convert mailbox to shared mailbox (Exchange Online)
+    try {
+        Write-Host "Converting mailbox for $upn to shared..."
+        Set-Mailbox -Identity $upn -Type Shared
+    } catch {
+        Write-Warning "Failed to convert mailbox: $_"
+    }
+
+    # Disable AD account
+    try {
+        Write-Host "Disabling AD account for $upn..."
+        Disable-ADAccount -Identity $user
+    } catch {
+        Write-Warning "Failed to disable AD account: $_"
+    }
+
+    # Move user to Disabled OU
+    try {
+        Write-Host "Moving user to Disabled OU..."
+        Move-ADObject -Identity $user.DistinguishedName -TargetPath $disabledOU
+    } catch {
+        Write-Warning "Failed to move user to disabled OU: $_"
+    }
+
+    Write-Host "--- Done with $empID ---\n"
+}
+
+#-----------------------------
+# CLEANUP
+#-----------------------------
+Start-ADSyncSyncCycle -PolicyType Delta
+Disconnect-ExchangeOnline -Confirm:$false
+Disconnect-MgGraph
+Write-Host "All done."
+```
+
+**Notes on PowerShell Script**:
+- ✅ Production-tested and currently working
+- ✅ Uses certificate-based authentication (more secure than client secret)
+- ✅ Connects to both Microsoft Graph and Exchange Online
+- ✅ Handles license removal via Graph API
+- ✅ Converts mailbox to shared type
+- ✅ Disables AD account and moves to Disabled OU
+- ✅ Triggers Azure AD sync after changes
+- ⚠️ Configuration values hardcoded - should be parameterized for n8n
+- ⚠️ Missing group membership removal - needs to be added
+- ⚠️ Missing supervisor mailbox permission grant - needs to be added
+- 🔄 Can be adapted for n8n Execute Command node or Azure Automation runbook
+
 **Webhook with Authentication**
 ```json
 {
@@ -406,8 +593,9 @@ return { json: { results } };
 - **Estimated effort**: 10 minutes
 
 #### 4. Create Webhook Trigger Node
-- **Description**: Setup webhook to accept employee termination requests
+- **Description**: Setup webhook to accept employee termination requests using n8n MCP server
 - **Node type**: `n8n-nodes-base.webhook`
+- **MCP Tool**: `mcp__n8n-mcp__n8n_create_workflow` (initial workflow creation with this node)
 - **Configuration**:
   - HTTP Method: `POST`
   - Path: `/terminate-employee` (or custom path)
@@ -436,6 +624,7 @@ return { json: { results } };
 #### 5. Input Validation Node
 - **Description**: Validate webhook input and determine lookup strategy
 - **Node type**: `n8n-nodes-base.code` (JavaScript)
+- **MCP Tool**: `mcp__n8n-mcp__n8n_update_partial_workflow` with `addNode` operation
 - **Logic**:
   ```javascript
   const input = $input.first().json;
@@ -474,6 +663,7 @@ return { json: { results } };
 #### 6. Lookup User in M365
 - **Description**: Find user in Microsoft 365 using Graph API
 - **Node type**: `n8n-nodes-base.httpRequest`
+- **MCP Tool**: `mcp__n8n-mcp__n8n_update_partial_workflow` with `addNode` operation
 - **Configuration**:
   - Method: `GET`
   - Authentication: Use Graph API OAuth2 credential
@@ -1171,10 +1361,285 @@ foreach ($group in $groups) {
       - `Content-Type`: `application/json`
 - **Estimated effort**: 15 minutes
 
-#### 26. Connect Error Handlers Throughout Workflow
-- **Description**: Implement error catching and routing for each critical step
+#### 26. Connect All Nodes and Error Handlers
+- **Description**: Connect all nodes together and implement error catching and routing for each critical step
+- **MCP Tool**: `mcp__n8n-mcp__n8n_update_partial_workflow` with multiple `addConnection` operations
 - **Node type**: Configure "On Error" workflow settings and node settings
-- **Configuration**:
+
+**Node Connections to Add**:
+Use `mcp__n8n-mcp__n8n_update_partial_workflow` with multiple `addConnection` operations:
+
+```javascript
+{
+  operations: [
+    // Main flow connections
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "webhook-trigger",
+        sourceOutputIndex: 0,
+        targetNodeId: "input-validation",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "input-validation",
+        sourceOutputIndex: 0,
+        targetNodeId: "lookup-m365-user",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "input-validation",
+        sourceOutputIndex: 0,
+        targetNodeId: "lookup-ad-user",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "lookup-m365-user",
+        sourceOutputIndex: 0,
+        targetNodeId: "extract-m365-details",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "lookup-ad-user",
+        sourceOutputIndex: 0,
+        targetNodeId: "extract-ad-details",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "extract-m365-details",
+        sourceOutputIndex: 0,
+        targetNodeId: "merge-validate",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "extract-ad-details",
+        sourceOutputIndex: 0,
+        targetNodeId: "merge-validate",
+        targetInputIndex: 1
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "merge-validate",
+        sourceOutputIndex: 0,
+        targetNodeId: "lookup-supervisor",
+        targetInputIndex: 0
+      }
+    },
+    // M365 operations chain
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "lookup-supervisor",
+        sourceOutputIndex: 0,
+        targetNodeId: "convert-mailbox",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "convert-mailbox",
+        sourceOutputIndex: 0,
+        targetNodeId: "grant-supervisor-access",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "grant-supervisor-access",
+        sourceOutputIndex: 0,
+        targetNodeId: "get-licenses",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "get-licenses",
+        sourceOutputIndex: 0,
+        targetNodeId: "remove-licenses",
+        targetInputIndex: 0
+      }
+    },
+    // AD operations chain
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "lookup-supervisor",
+        sourceOutputIndex: 0,
+        targetNodeId: "calc-disabled-value",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "calc-disabled-value",
+        sourceOutputIndex: 0,
+        targetNodeId: "disable-ad-account",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "disable-ad-account",
+        sourceOutputIndex: 0,
+        targetNodeId: "parse-groups",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "parse-groups",
+        sourceOutputIndex: 0,
+        targetNodeId: "remove-from-groups",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "remove-from-groups",
+        sourceOutputIndex: 0,
+        targetNodeId: "move-to-disabled-ou",
+        targetInputIndex: 0
+      }
+    },
+    // Convergence and completion
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "remove-licenses",
+        sourceOutputIndex: 0,
+        targetNodeId: "create-audit-log",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "move-to-disabled-ou",
+        sourceOutputIndex: 0,
+        targetNodeId: "create-audit-log",
+        targetInputIndex: 1
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "create-audit-log",
+        sourceOutputIndex: 0,
+        targetNodeId: "format-success-response",
+        targetInputIndex: 0
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "format-success-response",
+        sourceOutputIndex: 0,
+        targetNodeId: "send-success-response",
+        targetInputIndex: 0
+      }
+    },
+    // Error path connections
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "input-validation",
+        sourceOutputIndex: 0,
+        targetNodeId: "format-error-response",
+        targetInputIndex: 0,
+        onError: true
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "lookup-m365-user",
+        sourceOutputIndex: 0,
+        targetNodeId: "format-error-response",
+        targetInputIndex: 0,
+        onError: true
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "lookup-ad-user",
+        sourceOutputIndex: 0,
+        targetNodeId: "format-error-response",
+        targetInputIndex: 0,
+        onError: true
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "merge-validate",
+        sourceOutputIndex: 0,
+        targetNodeId: "format-error-response",
+        targetInputIndex: 0,
+        onError: true
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "convert-mailbox",
+        sourceOutputIndex: 0,
+        targetNodeId: "format-error-response",
+        targetInputIndex: 0,
+        onError: true
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "disable-ad-account",
+        sourceOutputIndex: 0,
+        targetNodeId: "format-error-response",
+        targetInputIndex: 0,
+        onError: true
+      }
+    },
+    {
+      type: "addConnection",
+      connection: {
+        sourceNodeId: "format-error-response",
+        sourceOutputIndex: 0,
+        targetNodeId: "send-error-response",
+        targetInputIndex: 0
+      }
+    }
+  ]
+}
+```
+
+**Configuration**:
   - For each critical node (M365 operations, AD operations):
     - Node settings → "Continue On Fail": OFF (default)
     - Connect to error path via error output
@@ -1193,7 +1658,12 @@ foreach ($group in $groups) {
 ### Phase 6: Testing & Validation
 
 #### 27. Unit Testing (Per Node/Phase)
-- **Description**: Test each phase independently in n8n
+- **Description**: Test each phase independently in n8n using MCP server tools
+- **MCP Tools for Testing**:
+  - `mcp__n8n-mcp__n8n_validate_workflow` - Validate workflow structure before testing
+  - `mcp__n8n-mcp__n8n_trigger_webhook_workflow` - Trigger webhook for testing
+  - `mcp__n8n-mcp__n8n_get_execution` - Get execution results
+  - `mcp__n8n-mcp__n8n_list_executions` - List all executions
 - **Test approach**:
   1. **Webhook & Validation (Phase 2)**:
      - Test with valid employee ID
@@ -1221,7 +1691,12 @@ foreach ($group in $groups) {
 - **Estimated effort**: 2 hours
 
 #### 28. Integration Testing (End-to-End)
-- **Description**: Test complete workflow from webhook to completion
+- **Description**: Test complete workflow from webhook to completion using n8n MCP server
+- **Testing Approach**:
+  1. Use `mcp__n8n-mcp__n8n_trigger_webhook_workflow` to trigger the workflow
+  2. Use `mcp__n8n-mcp__n8n_get_execution` to retrieve results (with mode='summary' or mode='full')
+  3. Verify execution success and data correctness
+  4. Check execution logs for errors
 - **Test scenarios**:
 
   **Scenario 1: Complete termination with employee ID**
@@ -2189,4 +2664,835 @@ Before production deployment:
 
 ---
 
-*This enhanced plan incorporates n8n best practices, validated node configurations, and detailed implementation guidance. It is ready for execution with `/execute-plan PRPs/employee-termination-workflow-enhanced.md`*
+## Future Enhancement: AI-Powered Email Handler Workflow
+
+### Vision
+
+An intelligent email processing workflow that:
+1. **Monitors** a dedicated HR/IT email inbox (e.g., `hr-requests@ii-us.com`)
+2. **Analyzes** incoming emails using AI (Claude, GPT-4, or similar)
+3. **Detects** termination requests automatically
+4. **Extracts** employee information, supervisor details, and reason
+5. **Validates** extracted data before processing
+6. **Triggers** the termination subflow via webhook
+7. **Responds** to the sender with confirmation or requests for clarification
+
+### Architecture Overview
+
+```
+[Email Inbox]
+    ↓
+[IMAP/Gmail/Outlook Trigger]
+    ↓
+[AI Email Classifier] ← Uses Claude/GPT-4
+    ↓
+[Termination Request?]
+    ├─ Yes → [AI Information Extractor]
+    │           ↓
+    │       [Validation & Confirmation]
+    │           ↓
+    │       [Call Termination Subflow via Webhook]
+    │           ↓
+    │       [Send Confirmation Email]
+    │
+    ├─ No → [Route to Appropriate Handler]
+    │           ↓
+    │       [Other HR workflows...]
+    │
+    └─ Unclear → [Request Human Review]
+                  ↓
+              [Email sender for clarification]
+```
+
+### Technical Implementation
+
+#### 1. Email Trigger Node
+**Node Type**: `n8n-nodes-base.emailReadImap` or `n8n-nodes-base.gmail`
+
+**Configuration**:
+- **For IMAP** (Exchange/Outlook):
+  ```json
+  {
+    "mailbox": "INBOX",
+    "options": {
+      "markSeen": false,
+      "downloadAttachments": true
+    },
+    "pollTimes": {
+      "item": [
+        {
+          "mode": "everyMinute"
+        }
+      ]
+    }
+  }
+  ```
+
+- **For Gmail**:
+  ```json
+  {
+    "event": "messageReceived",
+    "filters": {
+      "labelIds": ["Label_123"],
+      "query": "subject:(termination OR resignation OR offboarding)"
+    }
+  }
+  ```
+
+**Recommended Approach**: Create dedicated mailbox `termination-requests@ii-us.com` or use labels/folders
+
+#### 2. AI Email Analysis Node
+
+**Node Type**: `n8n-nodes-base.openAi` or `@n8n/n8n-nodes-langchain` (AI Agent)
+
+**Option A: Claude API (Anthropic - RECOMMENDED)**
+```javascript
+// Code Node with HTTP Request to Claude API
+const emailBody = $input.first().json.text;
+const emailSubject = $input.first().json.subject;
+const emailFrom = $input.first().json.from;
+
+const prompt = `You are an HR automation assistant. Analyze the following email and determine:
+1. Is this an employee termination/offboarding request? (yes/no/unclear)
+2. If yes, extract:
+   - Employee Name (full name)
+   - Employee ID (if mentioned)
+   - Employee Email (if mentioned)
+   - Termination Date (if mentioned)
+   - Supervisor/Manager Email (who should get mailbox access)
+   - Reason for termination (voluntary/involuntary/retirement/etc)
+   - Ticket Number (if mentioned)
+
+Email From: ${emailFrom}
+Subject: ${emailSubject}
+Body:
+${emailBody}
+
+Respond in JSON format:
+{
+  "is_termination_request": true/false/"unclear",
+  "confidence": 0.0-1.0,
+  "extracted_data": {
+    "employee_name": "...",
+    "employee_id": "...",
+    "employee_email": "...",
+    "termination_date": "YYYY-MM-DD",
+    "supervisor_email": "...",
+    "reason": "...",
+    "ticket_number": "..."
+  },
+  "missing_fields": ["field1", "field2"],
+  "clarification_needed": "Question to ask sender if unclear"
+}`;
+
+const response = await $http.request({
+  method: 'POST',
+  url: 'https://api.anthropic.com/v1/messages',
+  headers: {
+    'x-api-key': $credentials.anthropicApiKey,
+    'anthropic-version': '2023-06-01',
+    'content-type': 'application/json'
+  },
+  body: {
+    model: 'claude-3-5-sonnet-20241022',
+    max_tokens: 1024,
+    messages: [{
+      role: 'user',
+      content: prompt
+    }]
+  }
+});
+
+const aiAnalysis = JSON.parse(response.content[0].text);
+
+return {
+  json: {
+    ...aiAnalysis,
+    original_email: {
+      from: emailFrom,
+      subject: emailSubject,
+      body: emailBody,
+      messageId: $input.first().json.messageId
+    }
+  }
+};
+```
+
+**Option B: OpenAI GPT-4**
+```javascript
+// Using OpenAI node
+{
+  "model": "gpt-4-turbo-preview",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an HR automation assistant that extracts termination request information from emails."
+    },
+    {
+      "role": "user",
+      "content": "{{$json.emailPrompt}}"
+    }
+  ],
+  "response_format": { "type": "json_object" }
+}
+```
+
+#### 3. Decision Logic & Routing
+
+**Node Type**: `n8n-nodes-base.if` or `n8n-nodes-base.switch`
+
+**Logic**:
+```javascript
+// If Node
+const analysis = $input.first().json;
+
+// Route based on AI analysis
+if (analysis.is_termination_request === true && analysis.confidence >= 0.85) {
+  // High confidence - proceed to extraction
+  return [true];
+} else if (analysis.is_termination_request === "unclear" || analysis.confidence < 0.85) {
+  // Low confidence - request human review
+  return [false, true];
+} else {
+  // Not a termination request - route to other handlers
+  return [false, false, true];
+}
+```
+
+#### 4. Data Validation Node
+
+**Node Type**: `n8n-nodes-base.code`
+
+**Logic**:
+```javascript
+const data = $input.first().json.extracted_data;
+const missingFields = $input.first().json.missing_fields || [];
+
+// Required fields for termination
+const requiredFields = ['employee_name', 'employee_id'];
+
+// Check if we have minimum required data
+const hasMinimumData = requiredFields.every(field =>
+  data[field] && data[field].trim() !== ''
+);
+
+if (!hasMinimumData) {
+  // Missing critical data - need to ask sender
+  return {
+    json: {
+      validation_status: 'failed',
+      action: 'request_clarification',
+      missing_fields: missingFields,
+      message: `Missing required information: ${missingFields.join(', ')}`
+    }
+  };
+}
+
+// Optional: Verify employee exists in AD
+// Could add lookup here
+
+return {
+  json: {
+    validation_status: 'passed',
+    action: 'proceed_to_termination',
+    termination_payload: {
+      employeeId: data.employee_id,
+      employeeName: data.employee_name,
+      supervisorEmail: data.supervisor_email || null,
+      forwardeeEmail: data.supervisor_email || null,
+      reason: data.reason || 'Not specified',
+      ticketNumber: data.ticket_number || 'EMAIL-AUTO',
+      requestedBy: $input.first().json.original_email.from,
+      requestedDate: new Date().toISOString()
+    }
+  }
+};
+```
+
+#### 5. Call Termination Subflow
+
+**Node Type**: `n8n-nodes-base.httpRequest`
+
+**Configuration**:
+```javascript
+{
+  "method": "POST",
+  "url": "https://your-n8n-instance.com/webhook/terminate-employee",
+  "authentication": "headerAuth",
+  "headers": {
+    "X-API-Key": "{{$credentials.terminationWebhookKey}}",
+    "Content-Type": "application/json"
+  },
+  "body": "={{$json.termination_payload}}"
+}
+```
+
+#### 6. Response Email Templates
+
+**Node Type**: `n8n-nodes-base.emailSend` (SMTP/Gmail)
+
+**Template A: Confirmation Email** (when termination succeeds)
+```html
+Subject: ✅ Termination Request Processed - {{$json.employeeName}}
+
+Dear {{$json.requestedBy}},
+
+Your employee termination request has been automatically processed.
+
+Employee Details:
+- Name: {{$json.employeeName}}
+- ID: {{$json.employeeId}}
+- Status: Account Disabled
+- Mailbox: Converted to Shared
+- Licenses: Removed
+- AD Groups: Removed
+- Location: Moved to Disabled Users OU
+
+Supervisor Access: {{$json.supervisorEmail}}
+
+Execution ID: {{$json.executionId}}
+Processed: {{$now.toISO()}}
+
+If you have any questions, please contact IT Support.
+
+---
+This is an automated message from the IT Automation System.
+```
+
+**Template B: Clarification Request** (when data is missing)
+```html
+Subject: ⚠️ Termination Request - Additional Information Needed
+
+Dear {{$json.requestedBy}},
+
+We received your termination request but need additional information:
+
+Missing Information:
+{{$json.missing_fields.join('\n- ')}}
+
+Please reply to this email with:
+- Employee Full Name
+- Employee ID
+- Supervisor Email (for mailbox access)
+- Termination Date
+- Reason for Termination
+
+Once we receive this information, the termination will be processed automatically.
+
+Original Email:
+Subject: {{$json.original_email.subject}}
+Date: {{$json.original_email.date}}
+
+---
+This is an automated message from the IT Automation System.
+```
+
+**Template C: Error Notification** (when termination fails)
+```html
+Subject: ❌ Termination Request Failed - Manual Intervention Required
+
+Dear IT Team,
+
+An automated termination request failed and requires manual intervention.
+
+Employee: {{$json.employeeName}} (ID: {{$json.employeeId}})
+Requested By: {{$json.requestedBy}}
+Error: {{$json.error.message}}
+
+Partial Completion Status:
+- M365 Operations: {{$json.m365Status}}
+- AD Operations: {{$json.adStatus}}
+
+Please review and complete manually.
+
+Execution ID: {{$json.executionId}}
+---
+This is an automated message from the IT Automation System.
+```
+
+### n8n Credentials Required for Email Handler
+
+In addition to the termination workflow credentials, you'll need:
+
+#### 1. Email Account Credentials
+
+**For IMAP (Exchange/Outlook)**:
+- **Type**: IMAP
+- **User**: `termination-requests@ii-us.com`
+- **Password**: App password or account password
+- **Host**: `outlook.office365.com`
+- **Port**: `993`
+- **Secure**: Yes (TLS)
+
+**For Gmail**:
+- **Type**: Gmail OAuth2
+- **Scopes**: `https://mail.google.com/`
+
+#### 2. AI Provider Credentials
+
+**For Claude (Anthropic)**:
+- **Type**: Header Auth
+- **Header Name**: `x-api-key`
+- **API Key**: Get from https://console.anthropic.com
+
+**For OpenAI**:
+- **Type**: OpenAI Credentials
+- **API Key**: Get from https://platform.openai.com
+
+#### 3. Email Sending (SMTP)
+
+**Type**: SMTP
+- **Host**: `smtp.office365.com` (for Office 365)
+- **Port**: `587`
+- **User**: `it-automation@ii-us.com`
+- **Password**: App password
+- **Secure**: STARTTLS
+
+### Email Processing Workflow Structure
+
+```
+Workflow Name: "AI Email Handler - Termination Requests"
+
+[Email Trigger: IMAP/Gmail]
+    ↓
+[Extract Email Content]
+ (Code Node: Parse subject, body, from, attachments)
+    ↓
+[AI Analysis: Classify Request]
+ (HTTP Request to Claude API or OpenAI Node)
+    ↓
+[Parse AI Response]
+ (Code Node: Extract JSON, validate structure)
+    ↓
+[Decision: Request Type]
+ (Switch Node)
+    ├─ Case 1: Termination (confidence >= 0.85)
+    │     ↓
+    │  [Validate Extracted Data]
+    │   (Code Node: Check required fields)
+    │     ↓
+    │  [Decision: Data Complete?]
+    │   (If Node)
+    │     ├─ Yes → [Call Termination Webhook]
+    │     │          (HTTP Request Node)
+    │     │            ↓
+    │     │         [Send Confirmation Email]
+    │     │          (Email Send Node)
+    │     │
+    │     └─ No → [Send Clarification Email]
+    │               (Email Send Node)
+    │
+    ├─ Case 2: Unclear/Low Confidence
+    │     ↓
+    │  [Forward to IT Team for Review]
+    │   (Email Send Node)
+    │
+    └─ Case 3: Not Termination
+          ↓
+       [Route to Other Workflows]
+        (Could trigger other automation)
+```
+
+### Advanced Features
+
+#### 1. Learning & Improvement
+- **Log all AI decisions** to database
+- **Track accuracy** over time
+- **Collect feedback** from IT team on misclassifications
+- **Retrain prompts** based on false positives/negatives
+
+#### 2. Multi-language Support
+```javascript
+// Add language detection to AI prompt
+const prompt = `First, detect the language of this email.
+Then analyze in that language and respond in English JSON...`;
+```
+
+#### 3. Attachment Processing
+```javascript
+// Extract data from attachments (e.g., termination forms)
+if (email.attachments && email.attachments.length > 0) {
+  // Check for PDF forms, Excel lists, etc.
+  // Extract employee data from structured documents
+}
+```
+
+#### 4. Approval Workflow (Optional)
+```
+[AI Detects Termination]
+    ↓
+[Send Approval Request to Manager]
+ (Email with approval link)
+    ↓
+[Wait for Approval Webhook]
+ (Webhook trigger: /approve-termination/:token)
+    ↓
+[Proceed with Termination]
+```
+
+#### 5. Batch Processing
+```javascript
+// AI extracts multiple terminations from one email
+{
+  "is_termination_request": true,
+  "request_type": "batch",
+  "employees": [
+    { "name": "John Doe", "id": "12345" },
+    { "name": "Jane Smith", "id": "67890" }
+  ]
+}
+```
+
+### Implementation Phases
+
+#### Phase 1: Basic Email Detection (Week 1)
+- Set up email trigger
+- Implement AI classification
+- Route termination requests to manual review
+- Send confirmation emails
+
+#### Phase 2: Automated Extraction (Week 2)
+- Implement AI data extraction
+- Add validation logic
+- Test with sample emails
+- Refine prompts based on results
+
+#### Phase 3: Workflow Integration (Week 3)
+- Connect to termination subflow webhook
+- Implement error handling
+- Add response emails (confirmation/error)
+- Test end-to-end automation
+
+#### Phase 4: Enhancement & Optimization (Week 4)
+- Add approval workflow (if needed)
+- Implement batch processing
+- Create monitoring dashboard
+- Train team on new system
+
+### Success Metrics
+
+- **Detection Accuracy**: >95% correct classification
+- **Extraction Accuracy**: >90% correct data extraction
+- **Processing Time**: <2 minutes from email receipt to termination completion
+- **False Positives**: <5% (non-termination emails incorrectly processed)
+- **False Negatives**: <2% (termination emails missed)
+- **Manual Intervention Rate**: <10% of requests
+
+### Cost Estimation
+
+**AI API Costs** (Anthropic Claude):
+- ~$0.01-0.03 per email analyzed
+- Estimated 50 terminations/month = ~$0.50-1.50/month
+
+**Alternative**: Use local LLM (Ollama) for zero API costs
+
+### Sample Email Scenarios
+
+**Scenario 1: Clear Termination Request**
+```
+From: hr@ii-us.com
+Subject: Employee Termination - John Doe
+
+Please process the termination for:
+- Name: John Doe
+- Employee ID: 785389
+- Last Day: 2025-10-25
+- Supervisor: manager@ii-us.com
+- Reason: Voluntary resignation
+
+Ticket: HR-12345
+```
+**AI Output**: ✅ High confidence, all data extracted, auto-process
+
+**Scenario 2: Vague Request**
+```
+From: manager@ii-us.com
+Subject: Need to offboard someone
+
+John is leaving next week, can you handle his account?
+```
+**AI Output**: ⚠️ Unclear, request clarification
+
+**Scenario 3: Batch Request**
+```
+From: hr@ii-us.com
+Subject: Layoff - Department Closure
+
+Please process terminations for entire Sales team:
+- John Doe (ID: 12345)
+- Jane Smith (ID: 67890)
+- Bob Johnson (ID: 24680)
+
+Effective: 2025-11-01
+Supervisor for all: director@ii-us.com
+```
+**AI Output**: ✅ Batch detected, process multiple
+
+---
+
+*This AI Email Handler enhancement enables fully autonomous termination processing from email receipt to completion, with intelligent extraction and validation.*
+
+---
+
+## Final Workflow Activation via MCP
+
+**Before activating the workflow, complete these MCP validation steps:**
+
+### 1. Final Validation
+```javascript
+// Use MCP tool to validate complete workflow
+mcp__n8n-mcp__n8n_validate_workflow(id="workflow-id")
+```
+
+**Expected Results**:
+- All nodes valid
+- All connections valid
+- No missing credentials
+- No expression errors
+
+### 2. Review Workflow Structure
+```javascript
+// Get workflow to review complete structure
+mcp__n8n-mcp__n8n_get_workflow(id="workflow-id")
+```
+
+**Review Checklist**:
+- [ ] All 26 nodes created
+- [ ] All connections established (main flow + error paths)
+- [ ] Credentials properly assigned
+- [ ] Environment variables referenced correctly
+
+### 3. Activate Workflow
+```javascript
+// Activate via MCP
+mcp__n8n-mcp__n8n_update_partial_workflow(
+  id="workflow-id",
+  operations: [{
+    type: "updateSettings",
+    settings: { active: true }
+  }]
+)
+```
+
+### 4. Verify Activation
+```javascript
+// List workflows and check active status
+mcp__n8n-mcp__list_workflows()
+```
+
+**Confirmation**: Workflow should show `active: true` in the response
+
+### 5. Initial Test
+```javascript
+// Trigger first test execution
+mcp__n8n-mcp__n8n_trigger_webhook_workflow(
+  webhookUrl="https://your-n8n-instance.com/webhook/terminate-employee",
+  data={
+    "employeeId": "testuser01",
+    "supervisorEmail": "test@domain.com",
+    "reason": "Testing",
+    "ticketNumber": "TEST-001"
+  },
+  httpMethod="POST"
+)
+```
+
+### 6. Monitor Results
+```javascript
+// Get execution results
+mcp__n8n-mcp__n8n_get_execution(id="execution-id", mode="summary")
+
+// Or list recent executions
+mcp__n8n-mcp__n8n_list_executions(workflowId="workflow-id", limit=5)
+```
+
+---
+
+## MCP Tool Quick Reference
+
+### Workflow Lifecycle Management
+
+```javascript
+// 1. CREATE WORKFLOW
+mcp__n8n-mcp__n8n_create_workflow(
+  name="Employee Termination Automation",
+  nodes=[],
+  connections={},
+  settings={
+    executionOrder: "v1",
+    saveManualExecutions: true,
+    saveExecutionProgress: true
+  }
+)
+
+// 2. ADD NODES
+mcp__n8n-mcp__n8n_update_partial_workflow(
+  id="workflow-id",
+  operations=[{
+    type: "addNode",
+    node: {
+      id: "node-id",
+      name: "Node Name",
+      type: "n8n-nodes-base.webhook",
+      typeVersion: 2,
+      position: [240, 300],
+      parameters: { /* node config */ }
+    }
+  }]
+)
+
+// 3. CONNECT NODES
+mcp__n8n-mcp__n8n_update_partial_workflow(
+  id="workflow-id",
+  operations=[{
+    type: "addConnection",
+    connection: {
+      sourceNodeId: "source-node-id",
+      sourceOutputIndex: 0,
+      targetNodeId: "target-node-id",
+      targetInputIndex: 0
+    }
+  }]
+)
+
+// 4. VALIDATE WORKFLOW
+mcp__n8n-mcp__n8n_validate_workflow(
+  id="workflow-id",
+  options: {
+    validateNodes: true,
+    validateConnections: true,
+    validateExpressions: true,
+    profile: "runtime"
+  }
+)
+
+// 5. TEST WORKFLOW
+mcp__n8n-mcp__n8n_trigger_webhook_workflow(
+  webhookUrl="https://n8n.../webhook/terminate-employee",
+  data={ /* test data */ },
+  httpMethod="POST",
+  waitForResponse=true
+)
+
+// 6. GET EXECUTION RESULTS
+mcp__n8n-mcp__n8n_get_execution(
+  id="execution-id",
+  mode="summary",  // or "preview", "filtered", "full"
+  includeInputData=false,
+  itemsLimit=2
+)
+
+// 7. ACTIVATE WORKFLOW
+mcp__n8n-mcp__n8n_update_partial_workflow(
+  id="workflow-id",
+  operations=[{
+    type: "updateSettings",
+    settings: { active: true }
+  }]
+)
+
+// 8. MONITOR EXECUTIONS
+mcp__n8n-mcp__n8n_list_executions(
+  workflowId="workflow-id",
+  status="success",  // or "error", "waiting"
+  limit=100,
+  includeData=false
+)
+
+// 9. GET WORKFLOW DETAILS
+mcp__n8n-mcp__n8n_get_workflow(id="workflow-id")
+
+// 10. LIST ALL WORKFLOWS
+mcp__n8n-mcp__list_workflows(
+  active=true,
+  limit=100
+)
+```
+
+### Common Operations
+
+**Update Node Configuration**:
+```javascript
+mcp__n8n-mcp__n8n_update_partial_workflow(
+  id="workflow-id",
+  operations=[{
+    type: "updateNode",
+    nodeId: "node-id",
+    updates: {
+      parameters: { /* new parameters */ }
+    }
+  }]
+)
+```
+
+**Remove Node**:
+```javascript
+mcp__n8n-mcp__n8n_update_partial_workflow(
+  id="workflow-id",
+  operations=[{
+    type: "removeNode",
+    nodeId: "node-id"
+  }]
+)
+```
+
+**Enable/Disable Node**:
+```javascript
+mcp__n8n-mcp__n8n_update_partial_workflow(
+  id="workflow-id",
+  operations=[{
+    type: "disableNode",
+    nodeId: "node-id"
+  }]
+)
+```
+
+**Health Check**:
+```javascript
+mcp__n8n-mcp__n8n_health_check()
+```
+
+**Diagnostics**:
+```javascript
+mcp__n8n-mcp__n8n_diagnostic(verbose=true)
+```
+
+---
+
+## Implementation Checklist
+
+### Pre-Implementation
+- [ ] Verify n8n MCP server connection (`mcp__n8n-mcp__n8n_health_check`)
+- [ ] Azure AD app registration complete (Task 1)
+- [ ] n8n credentials configured (Task 2)
+- [ ] Environment variables set (Task 3)
+- [ ] PowerShell environment ready (if using PowerShell approach)
+
+### Workflow Creation
+- [ ] Create base workflow using `n8n_create_workflow`
+- [ ] Add all 26 nodes using `n8n_update_partial_workflow` with `addNode`
+- [ ] Connect all nodes using `n8n_update_partial_workflow` with `addConnection`
+- [ ] Validate workflow using `n8n_validate_workflow`
+
+### Testing
+- [ ] Unit test each phase using `n8n_trigger_webhook_workflow`
+- [ ] Integration test end-to-end scenarios
+- [ ] Edge case testing (user not found, no licenses, etc.)
+- [ ] Performance testing (timing, concurrent requests)
+
+### Deployment
+- [ ] Final validation passed
+- [ ] Test execution successful
+- [ ] Activate workflow using MCP
+- [ ] Verify webhook URL accessible
+- [ ] Document webhook endpoint and authentication
+
+### Post-Deployment
+- [ ] Monitor first 5 executions using `n8n_list_executions`
+- [ ] Review execution logs for errors
+- [ ] Update runbook with learnings
+- [ ] Train team on manual remediation if needed
+
+---
+
+*This comprehensive implementation plan provides everything needed to create the Employee Termination Automation workflow programmatically using n8n MCP server tools, ensuring a reproducible, well-tested, and production-ready solution.*

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__archon__find_projects",
+      "mcp__archon__find_tasks",
+      "Bash(kubectl get:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

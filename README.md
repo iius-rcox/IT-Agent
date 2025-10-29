@@ -1,196 +1,272 @@
-# Archon AI Coding Workflow Template
+# IT-Agent: Employee Termination Automation
 
-A simple yet reliable template for systematic AI-assisted development using **create-plan** and **execute-plan** workflows, powered by [Archon](https://github.com/coleam00/Archon) - the open-source AI coding command center. Build on top of this and create your own AI coding workflows!
+Automated employee termination workflow using n8n, PowerShell, Microsoft Graph, Exchange Online, and Active Directory.
 
-## What is This?
+## 🎯 Project Overview
 
-This is a reusable workflow template that brings structure and reliability to AI coding assistants. Instead of ad-hoc prompting, you get:
+This project implements a fully automated employee termination process that:
+- Converts M365 mailboxes to shared type
+- Removes all M365 licenses
+- Grants supervisor mailbox access
+- Disables Active Directory accounts
+- Removes all group memberships
+- Moves users to disabled OU
+- Triggers Azure AD sync
 
-- **Systematic planning** from requirements to implementation
-- **Knowledge-augmented development** via Archon's RAG capabilities
-- **Task management integration** for progress tracking
-- **Specialized subagents** for analysis and validation
-- **Codebase consistency** through pattern analysis
+**Architecture**: n8n (Linux/Kubernetes) → SSH → Windows Domain Controller → PowerShell Script
 
-Works with **Claude Code**, **Cursor**, **Windsurf**, **Codex**, and any AI coding assistant that supports custom commands or prompt templates.
-
-## Core Workflows
-
-### 1. Create Plan (`/create-plan`)
-
-Transform requirements into actionable implementation plans through systematic research and analysis.
-
-**What it does:**
-- Reads your requirements document
-- Searches Archon's knowledge base for best practices and patterns
-- Analyzes your codebase using the `codebase-analyst` subagent
-- Produces a comprehensive implementation plan (PRP) with:
-  - Task breakdown with dependencies and effort estimates
-  - Technical architecture and integration points
-  - Code references and patterns to follow
-  - Testing strategy and success criteria
-
-**Usage:**
-```bash
-/create-plan requirements/my-feature.md
-```
-
-### 2. Execute Plan (`/execute-plan`)
-
-Execute implementation plans with integrated Archon task management and validation.
-
-**What it does:**
-- Reads your implementation plan
-- Creates an Archon project and tasks automatically
-- Implements each task systematically (`todo` → `doing` → `review` → `done`)
-- Validates with the `validator` subagent to create unit tests
-- Tracks progress throughout with full visibility
-
-**Usage:**
-```bash
-/execute-plan PRPs/my-feature.md
-```
-
-## Why Archon?
-
-[Archon](https://github.com/coleam00/Archon) is an open-source AI coding OS that provides:
-
-- **Knowledge Base**: RAG-powered search across documentation, PDFs, and crawled websites
-- **Task Management**: Hierarchical projects with AI-assisted task creation and tracking
-- **Smart Search**: Hybrid search with contextual embeddings and reranking
-- **Multi-Agent Support**: Connect multiple AI assistants to shared context
-- **Model Context Protocol**: Standard MCP server for seamless integration
-
-Think of it as the command center that keeps your AI coding assistant informed and organized.
-
-## What's Included
-
-```
-.claude/
-├── commands/
-│   ├── create-plan.md      # Requirements → Implementation plan
-│   ├── execute-plan.md     # Plan → Tracked implementation
-│   └── primer.md           # Project context loader
-├── agents/
-│   ├── codebase-analyst.md # Pattern analysis specialist
-│   └── validator.md        # Testing specialist
-└── CLAUDE.md               # Archon-first workflow rules
-```
-
-## Setup Instructions
-
-### For Claude Code
-
-1. **Copy the template to your project:**
-   ```bash
-   cp -r use-cases/archon-example-workflow/.claude /path/to/your-project/
-   ```
-
-2. **Install Archon MCP server** (if not already installed):
-   - Follow instructions at [github.com/coleam00/Archon](https://github.com/coleam00/Archon)
-   - Configure in your Claude Code settings
-
-3. **Start using workflows:**
-   ```bash
-   # In Claude Code
-   /create-plan requirements/your-feature.md
-   # Review the generated plan, then:
-   /execute-plan PRPs/your-feature.md
-   ```
-
-### For Other AI Assistants
-
-The workflows are just markdown prompt templates - adapt them to your tool - examples:
-
-#### **Cursor / Windsurf**
-- Copy files to `.cursor/` or `.windsurf/` directory
-- Use as custom commands or rules files
-- Manually invoke workflows by copying prompt content
-
-#### **Cline / Aider / Continue.dev**
-- Save workflows as prompt templates
-- Reference them in your session context
-- Adapt the MCP tool calls to your tool's API
-
-#### **Generic Usage**
-Even without tool-specific integrations:
-1. Read `create-plan.md` and follow its steps manually
-2. Use Archon's web UI for task management if MCP isn't available
-3. Adapt the workflow structure to your assistant's capabilities
-
-## Workflow in Action
-
-### New Project Example
-
-```bash
-# 1. Write requirements
-echo "Build a REST API for user authentication" > requirements/auth-api.md
-
-# 2. Create plan
-/create-plan requirements/auth-api.md
-# → AI searches Archon knowledge base for JWT best practices
-# → AI analyzes your codebase patterns
-# → Generates PRPs/auth-api.md with 12 tasks
-
-# 3. Execute plan
-/execute-plan PRPs/auth-api.md
-# → Creates Archon project "Authentication API"
-# → Creates 12 tasks in Archon
-# → Implements task-by-task with status tracking
-# → Runs validator subagent for unit tests
-# → Marks tasks done as they complete
-```
-
-### Existing Project Example
-
-```bash
-# 1. Create feature requirements
-# 2. Run create-plan (it analyzes existing codebase)
-/create-plan requirements/new-feature.md
-# → Discovers existing patterns from your code
-# → Suggests integration points
-# → Follows your project's conventions
-
-# 3. Execute with existing Archon project
-# Edit execute-plan.md to reference project ID or let it create new one
-/execute-plan PRPs/new-feature.md
-```
-
-## Key Benefits
-
-### For New Projects
-- **Pattern establishment**: AI learns and documents your conventions
-- **Structured foundation**: Plans prevent scope creep and missed requirements
-- **Knowledge integration**: Leverage best practices from day one
-
-### For Existing Projects
-- **Convention adherence**: Codebase analysis ensures consistency
-- **Incremental enhancement**: Add features that fit naturally
-- **Context retention**: Archon keeps project history and patterns
-
-## Customization
-
-### Adapt the Workflows
-
-Edit the markdown files to match your needs - examples:
-
-- **Change task granularity** in `create-plan.md` (Step 3.1)
-- **Add custom validation** in `execute-plan.md` (Step 6)
-- **Modify report format** in either workflow
-- **Add your own subagents** for specialized tasks
-
-### Extend with Subagents
-
-Create new specialized agents in `.claude/agents/`:
-
-```markdown
----
-name: "security-auditor"
-description: "Reviews code for security vulnerabilities"
-tools: Read, Grep, Bash
 ---
 
-You are a security specialist who reviews code for...
+## 📚 Documentation
+
+All documentation is organized in the [`docs/`](docs/) directory:
+
+### 🚀 **Quick Start: SSH Implementation**
+
+**Start here for deployment**: [`docs/ssh-implementation/`](docs/ssh-implementation/)
+
+Follow these guides in order (~70 minutes total):
+
+1. **[SSH-IMPLEMENTATION-SUMMARY.md](docs/ssh-implementation/SSH-IMPLEMENTATION-SUMMARY.md)** - 📋 Complete overview (read first!)
+2. **[PRE-IMPLEMENTATION-CHECKLIST.md](docs/ssh-implementation/PRE-IMPLEMENTATION-CHECKLIST.md)** - ✅ Prerequisites (10 min)
+3. **[SSH-CONFIGURATION.md](docs/ssh-implementation/SSH-CONFIGURATION.md)** - 🔧 SSH setup (20 min)
+4. **[PS-SCRIPT-DC-DEPLOYMENT.md](docs/ssh-implementation/PS-SCRIPT-DC-DEPLOYMENT.md)** - 📦 Script deployment (15 min)
+5. **[N8N-SSH-CREDENTIALS-GUIDE.md](docs/ssh-implementation/N8N-SSH-CREDENTIALS-GUIDE.md)** - 🔑 n8n credentials (5 min)
+6. **[N8N-WORKFLOW-SSH-UPDATE.md](docs/ssh-implementation/N8N-WORKFLOW-SSH-UPDATE.md)** - 🔄 Workflow update (15 min)
+7. **[TESTING-VALIDATION-GUIDE.md](docs/ssh-implementation/TESTING-VALIDATION-GUIDE.md)** - 🧪 Testing (30 min)
+
+### 📖 **Other Documentation**
+
+- **[Implementation Guides](docs/implementation-guides/)** - Original workflow design documentation
+- **[Status Reports](docs/status-reports/)** - Implementation progress tracking
+- **[Infrastructure](docs/infrastructure/)** - n8n server setup and troubleshooting
+
+Full documentation index: **[docs/README.md](docs/README.md)**
+
+---
+
+## 🏗️ Architecture
+
+### Current Implementation (SSH-Based)
+
+```
+┌─────────────────────────┐
+│ n8n (Linux Container)   │
+│ Azure Kubernetes (AKS)  │
+└───────────┬─────────────┘
+            │
+            │ SSH (Port 22)
+            │ Private Key Auth
+            │
+┌───────────▼─────────────┐
+│ Windows Domain          │
+│ Controller              │
+│ ┌─────────────────────┐ │
+│ │ OpenSSH Server      │ │
+│ └──────────┬──────────┘ │
+│            │             │
+│ ┌──────────▼──────────┐ │
+│ │ Terminate-          │ │
+│ │ Employee.ps1        │ │
+│ └─────────────────────┘ │
+│                         │
+│ • Active Directory      │
+│ • Microsoft Graph       │
+│ • Exchange Online       │
+└─────────────────────────┘
 ```
 
-Then reference in your workflows.
+**Why SSH?**
+- n8n runs in Linux container (can't execute Windows PowerShell directly)
+- SSH enables remote execution on Windows DC
+- Zero additional cost, uses existing infrastructure
+- Secure with SSH key authentication
+
+---
+
+## 🔧 Prerequisites
+
+### Infrastructure
+- Windows Domain Controller with:
+  - Active Directory
+  - PowerShell 5.1+
+  - Modules: Microsoft.Graph, ExchangeOnlineManagement, ActiveDirectory
+- n8n instance (running in Kubernetes/AKS)
+- Network connectivity between n8n and DC
+
+### Azure AD Setup
+- Azure AD App Registration with:
+  - Application (client) ID
+  - Tenant ID
+  - Certificate for authentication
+- Permissions:
+  - User.ReadWrite.All
+  - Directory.ReadWrite.All
+  - Group.ReadWrite.All
+  - Exchange.ManageAsApp
+
+---
+
+## 📦 What's Included
+
+```
+IT-Agent/
+├── docs/                           # All documentation (organized)
+│   ├── README.md                   # Documentation index
+│   ├── ssh-implementation/         # SSH setup guides (main implementation)
+│   ├── implementation-guides/      # Original workflow documentation
+│   ├── status-reports/             # Progress tracking
+│   └── infrastructure/             # Server setup docs
+│
+├── PRPs/                           # Project Requirement Proposals
+│   └── employee-termination-workflow-enhanced.md
+│
+├── .claude/                        # Claude Code configuration
+│   ├── commands/                   # Custom slash commands
+│   └── agents/                     # Specialized subagents
+│
+├── CLAUDE.md                       # Project instructions for Claude
+└── README.md                       # This file
+```
+
+---
+
+## 🚀 Getting Started
+
+### For New Deployments
+
+1. **Read the overview**:
+   ```bash
+   cat docs/ssh-implementation/SSH-IMPLEMENTATION-SUMMARY.md
+   ```
+
+2. **Follow the implementation guides** in the ssh-implementation folder (in order)
+
+3. **Test thoroughly** using the validation guide
+
+### For Existing Deployments
+
+- **Troubleshooting**: Check [docs/infrastructure/](docs/infrastructure/)
+- **Status Updates**: Review [docs/status-reports/](docs/status-reports/)
+- **Workflow Changes**: See [docs/ssh-implementation/N8N-WORKFLOW-SSH-UPDATE.md](docs/ssh-implementation/N8N-WORKFLOW-SSH-UPDATE.md)
+
+---
+
+## 🔐 Security Considerations
+
+- SSH private keys stored securely in n8n credentials
+- Certificate-based authentication for Azure AD
+- OpenSSH Server with key-only authentication
+- Audit logging enabled for all operations
+- Regular key rotation (90-180 days recommended)
+
+---
+
+## 🧪 Testing
+
+Complete testing guide available: [docs/ssh-implementation/TESTING-VALIDATION-GUIDE.md](docs/ssh-implementation/TESTING-VALIDATION-GUIDE.md)
+
+**Test phases**:
+1. Component testing (SSH, PowerShell, certificates)
+2. Script testing (with invalid/valid employee IDs)
+3. n8n workflow testing (manual and webhook triggers)
+4. Test user scenarios (full termination process)
+5. Error scenario testing
+6. Performance testing
+
+---
+
+## 📊 Project Status
+
+**Current Phase**: Documentation complete, ready for implementation
+
+**Implementation Status**:
+- ✅ Documentation created (8 comprehensive guides)
+- ✅ Architecture designed (SSH-based approach)
+- ✅ Testing procedures documented
+- ⏳ Pending: SSH setup on DC
+- ⏳ Pending: Workflow deployment to n8n
+- ⏳ Pending: End-to-end testing
+
+For detailed status: [docs/status-reports/IMPLEMENTATION-STATUS-UPDATED.md](docs/status-reports/IMPLEMENTATION-STATUS-UPDATED.md)
+
+---
+
+## 🛠️ Technology Stack
+
+- **Orchestration**: n8n (workflow automation)
+- **Execution**: PowerShell 5.1+
+- **Infrastructure**: Azure Kubernetes Service (AKS)
+- **Authentication**: OpenSSH, Certificate-based auth
+- **Integrations**:
+  - Microsoft Graph API
+  - Exchange Online PowerShell
+  - Active Directory PowerShell
+
+---
+
+## 📝 Maintenance
+
+### Regular Tasks
+
+**Weekly**:
+- Review n8n execution logs
+- Monitor SSH connection success rate
+
+**Monthly**:
+- Test with test user
+- Verify certificate expiration date
+
+**Quarterly**:
+- Rotate SSH keys
+- Update PowerShell modules
+- Review and optimize script
+
+---
+
+## 🆘 Support
+
+### Common Issues
+
+| Issue | Documentation |
+|-------|---------------|
+| SSH connection fails | [SSH-CONFIGURATION.md](docs/ssh-implementation/SSH-CONFIGURATION.md#troubleshooting-guide) |
+| PowerShell script errors | [PS-SCRIPT-DC-DEPLOYMENT.md](docs/ssh-implementation/PS-SCRIPT-DC-DEPLOYMENT.md#phase-6-troubleshooting) |
+| n8n workflow issues | [N8N-WORKFLOW-SSH-UPDATE.md](docs/ssh-implementation/N8N-WORKFLOW-SSH-UPDATE.md#troubleshooting) |
+| n8n server problems | [N8N-SERVER-FIX-GUIDE.md](docs/infrastructure/N8N-SERVER-FIX-GUIDE.md) |
+
+### Getting Help
+
+1. Check relevant guide's troubleshooting section
+2. Review [TESTING-VALIDATION-GUIDE.md](docs/ssh-implementation/TESTING-VALIDATION-GUIDE.md#troubleshooting-quick-reference)
+3. See [SSH-IMPLEMENTATION-SUMMARY.md](docs/ssh-implementation/SSH-IMPLEMENTATION-SUMMARY.md#common-issues-and-solutions)
+
+---
+
+## 🤝 Contributing
+
+This project uses [Archon](https://github.com/coleam00/Archon) for AI-assisted development with task management and knowledge base integration.
+
+### Development Workflow
+
+Managed through Archon MCP server:
+- Project: "SSH PowerShell Execution for n8n"
+- Tasks tracked with status: `todo` → `doing` → `review` → `done`
+- All 8 implementation guides created and completed
+
+---
+
+## 📄 License
+
+[Add your license here]
+
+---
+
+## 📞 Contact
+
+[Add contact information]
+
+---
+
+**Last Updated**: 2025-10-28
+**Version**: 1.0 - SSH Implementation Documentation Complete
