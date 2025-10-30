@@ -1,0 +1,356 @@
+{
+  "microsoft_graph_api_workflow": {
+    "name": "Employee Termination - Microsoft Graph",
+    "nodes": [
+      {
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "position": [250, 300],
+        "parameters": {
+          "path": "terminate-employee",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Get User",
+        "type": "n8n-nodes-base.microsoftEntra",
+        "position": [450, 300],
+        "parameters": {
+          "resource": "user",
+          "operation": "get",
+          "userId": "={{ $json.employeeEmail }}"
+        }
+      },
+      {
+        "name": "Disable Account",
+        "type": "n8n-nodes-base.microsoftEntra",
+        "position": [650, 300],
+        "parameters": {
+          "resource": "user",
+          "operation": "update",
+          "userId": "={{ $node['Get User'].json.id }}",
+          "updateFields": {
+            "accountEnabled": false,
+            "city": "Terminated",
+            "department": "Terminated",
+            "jobTitle": "Terminated - {{ $today.format('yyyy-MM-dd') }}"
+          }
+        }
+      },
+      {
+        "name": "Remove from Groups",
+        "type": "n8n-nodes-base.microsoftEntra",
+        "position": [850, 300],
+        "parameters": {
+          "resource": "user",
+          "operation": "removeFromGroup",
+          "userId": "={{ $node['Get User'].json.id }}",
+          "groupId": "={{ $json.groupId }}"
+        }
+      }
+    ]
+  },
+
+  "ldap_workflow": {
+    "name": "Employee Termination - LDAP",
+    "nodes": [
+      {
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "position": [250, 300],
+        "parameters": {
+          "path": "terminate-employee",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Search User",
+        "type": "n8n-nodes-base.ldap",
+        "position": [450, 300],
+        "parameters": {
+          "operation": "search",
+          "baseDn": "DC=insulationsinc,DC=local",
+          "searchFor": "User",
+          "attribute": "sAMAccountName",
+          "searchText": "={{ $json.employeeId }}",
+          "returnAll": false,
+          "limit": 1
+        }
+      },
+      {
+        "name": "Disable Account",
+        "type": "n8n-nodes-base.ldap",
+        "position": [650, 300],
+        "parameters": {
+          "operation": "update",
+          "dn": "={{ $node['Search User'].json[0].dn }}",
+          "updateAttributes": "replace",
+          "attributes": {
+            "values": [
+              {
+                "attribute": "userAccountControl",
+                "value": "514"
+              },
+              {
+                "attribute": "description",
+                "value": "Terminated - {{ $today.format('yyyy-MM-dd') }}"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "Move to Disabled OU",
+        "type": "n8n-nodes-base.ldap",
+        "position": [850, 300],
+        "parameters": {
+          "operation": "rename",
+          "dn": "={{ $node['Search User'].json[0].dn }}",
+          "newDn": "CN={{ $json.employeeId }},OU=Disabled Users,DC=insulationsinc,DC=local"
+        }
+      }
+    ]
+  },
+
+  "ssh_keyvault_workflow": {
+    "name": "Employee Termination - SSH with Key Vault",
+    "nodes": [
+      {
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "position": [250, 300],
+        "parameters": {
+          "path": "terminate-employee",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Get Azure Token",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [450, 300],
+        "parameters": {
+          "url": "http://169.254.169.254/metadata/identity/oauth2/token",
+          "method": "GET",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              {
+                "name": "api-version",
+                "value": "2018-02-01"
+              },
+              {
+                "name": "resource",
+                "value": "https://vault.azure.net"
+              }
+            ]
+          },
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Metadata",
+                "value": "true"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "Get Password from Key Vault",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [650, 300],
+        "parameters": {
+          "url": "https://iius-akv.vault.azure.net/secrets/DC01-SSH-KEY?api-version=7.4",
+          "method": "GET",
+          "authentication": "none",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $node['Get Azure Token'].json.access_token }}"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "Execute Termination Script",
+        "type": "n8n-nodes-base.ssh",
+        "position": [850, 300],
+        "parameters": {
+          "authentication": "password",
+          "resource": "command",
+          "operation": "execute",
+          "command": "=powershell.exe -ExecutionPolicy Bypass -File C:\\Scripts\\Terminate-Employee.ps1 -EmployeeID {{ $json.employeeId }}",
+          "cwd": "/"
+        },
+        "credentials": {
+          "ssh": {
+            "id": "dc-ssh-password",
+            "name": "DC SSH Password Auth"
+          }
+        }
+      }
+    ]
+  },
+
+  "http_api_workflow": {
+    "name": "Employee Termination - Custom API",
+    "nodes": [
+      {
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "position": [250, 300],
+        "parameters": {
+          "path": "terminate-employee",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Call DC API",
+        "type": "n8n-nodes-base.httpRequest",
+        "position": [450, 300],
+        "parameters": {
+          "url": "https://dc01.insulationsinc.local:8443/api/employee/terminate",
+          "method": "POST",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "X-API-Key",
+                "value": "={{ $credentials.dcApiKey }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"employeeId\": \"{{ $json.employeeId }}\",\n  \"terminationDate\": \"{{ $today.format('yyyy-MM-dd') }}\",\n  \"reason\": \"{{ $json.reason }}\"\n}"
+        }
+      },
+      {
+        "name": "Check Status",
+        "type": "n8n-nodes-base.if",
+        "position": [650, 300],
+        "parameters": {
+          "conditions": {
+            "number": [
+              {
+                "value1": "={{ $node['Call DC API'].json.statusCode }}",
+                "operation": "equal",
+                "value2": 200
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "Success Notification",
+        "type": "n8n-nodes-base.slack",
+        "position": [850, 250],
+        "parameters": {
+          "resource": "message",
+          "operation": "post",
+          "channel": "#hr-notifications",
+          "text": "=Employee {{ $json.employeeId }} successfully terminated"
+        }
+      },
+      {
+        "name": "Error Handler",
+        "type": "n8n-nodes-base.slack",
+        "position": [850, 350],
+        "parameters": {
+          "resource": "message",
+          "operation": "post",
+          "channel": "#it-alerts",
+          "text": "=ERROR: Failed to terminate employee {{ $json.employeeId }}. Error: {{ $node['Call DC API'].json.error }}"
+        }
+      }
+    ]
+  },
+
+  "hybrid_fallback_workflow": {
+    "name": "Employee Termination - Hybrid with Fallback",
+    "nodes": [
+      {
+        "name": "Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "position": [250, 300],
+        "parameters": {
+          "path": "terminate-employee",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Try Microsoft Graph",
+        "type": "n8n-nodes-base.microsoftEntra",
+        "position": [450, 250],
+        "continueOnFail": true,
+        "parameters": {
+          "resource": "user",
+          "operation": "update",
+          "userId": "={{ $json.employeeEmail }}",
+          "updateFields": {
+            "accountEnabled": false
+          }
+        }
+      },
+      {
+        "name": "Check Graph Success",
+        "type": "n8n-nodes-base.if",
+        "position": [650, 300],
+        "parameters": {
+          "conditions": {
+            "boolean": [
+              {
+                "value1": "={{ $node['Try Microsoft Graph'].error }}",
+                "operation": "isEmpty"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "Fallback to LDAP",
+        "type": "n8n-nodes-base.ldap",
+        "position": [850, 350],
+        "parameters": {
+          "operation": "search",
+          "baseDn": "DC=insulationsinc,DC=local",
+          "searchFor": "User",
+          "attribute": "mail",
+          "searchText": "={{ $json.employeeEmail }}"
+        }
+      },
+      {
+        "name": "LDAP Disable",
+        "type": "n8n-nodes-base.ldap",
+        "position": [1050, 350],
+        "parameters": {
+          "operation": "update",
+          "dn": "={{ $json[0].dn }}",
+          "updateAttributes": "replace",
+          "attributes": {
+            "values": [
+              {
+                "attribute": "userAccountControl",
+                "value": "514"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "Log Success",
+        "type": "n8n-nodes-base.code",
+        "position": [1050, 250],
+        "parameters": {
+          "language": "javascript",
+          "code": "console.log(`Employee ${$json.employeeEmail} terminated via ${$node['Check Graph Success'].json.output === 'true' ? 'Graph API' : 'LDAP'}`);\nreturn $input.all();"
+        }
+      }
+    ]
+  }
+}
