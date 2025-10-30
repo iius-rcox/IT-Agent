@@ -1,0 +1,33 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Node / Python (future-proof)
+node_modules/
+venv/
+.env
+.env.*
+*.pyc
+__pycache__/
+
+# Local AI / tooling config
+.claude/
+
+# Azure CLI outputs created during reviews
+aks.cluster.json
+aks.nodepools.json
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+*.swp
+~$*
+
+# n8n exports/caches (if generated later)
+.n8n/
+
+# System-specific
+Desktop.ini
