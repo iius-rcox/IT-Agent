@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: n8n-cleanup-executions
+  namespace: n8n-prod
+spec:
+  template:
+    spec:
+      containers:
+      - name: cleanup
+        image: alpine:latest
+        command:
+        - sh
+        - -c
+        - |
+          echo "Installing sqlite3..."
+          apk add --no-cache sqlite3
+
+          echo "Mounting n8n data volume..."
+          cd /data
+
+          echo "Checking current database size..."
+          ls -lah database.sqlite
+
+          echo "Backing up database schema and workflows (no executions)..."
+          sqlite3 database.sqlite ".dump workflow_entity" > /tmp/workflows.sql
+          sqlite3 database.sqlite ".dump webhook_entity" > /tmp/webhooks.sql
+          sqlite3 database.sqlite ".dump credentials_entity" > /tmp/credentials.sql
+          sqlite3 database.sqlite ".dump tag_entity" > /tmp/tags.sql
+          sqlite3 database.sqlite ".dump shared_workflow" > /tmp/shared.sql
+          sqlite3 database.sqlite ".dump shared_credentials" > /tmp/shared_creds.sql
+          sqlite3 database.sqlite ".dump workflow_statistics" > /tmp/stats.sql
+          sqlite3 database.sqlite ".dump variables" > /tmp/variables.sql
+          sqlite3 database.sqlite ".dump event_destinations" > /tmp/events.sql
+          sqlite3 database.sqlite ".dump installed_packages" > /tmp/packages.sql
+          sqlite3 database.sqlite ".dump installed_nodes" > /tmp/nodes.sql
+
+          echo "Counting executions to delete..."
+          sqlite3 database.sqlite "SELECT COUNT(*) FROM execution_entity;"
+
+          echo "Deleting ALL execution data..."
+          sqlite3 database.sqlite "DELETE FROM execution_entity;"
+
+          echo "Running VACUUM to reclaim space..."
+          sqlite3 database.sqlite "VACUUM;"
+
+          echo "Checking new database size..."
+          ls -lah database.sqlite
+
+          echo "Checking disk space..."
+          df -h /data
+
+          echo "Cleanup complete!"
+        volumeMounts:
+        - name: n8n-data
+          mountPath: /data
+      volumes:
+      - name: n8n-data
+        persistentVolumeClaim:
+          claimName: n8n-data
+      restartPolicy: Never
+  backoffLimit: 1

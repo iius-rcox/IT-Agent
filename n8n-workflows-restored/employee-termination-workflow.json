@@ -1,0 +1,463 @@
+{
+  "name": "Employee Termination Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "terminate-employee",
+        "method": "POST",
+        "responseMode": "responseNode",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "webhookId": "terminate-employee-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate required fields\nconst required = ['employeeId', 'supervisorEmail'];\nconst missing = [];\n\nfor (const field of required) {\n  if (!$input.first().json[field]) {\n    missing.push(field);\n  }\n}\n\nif (missing.length > 0) {\n  throw new Error(`Missing required fields: ${missing.join(', ')}`);\n}\n\n// Extract and prepare data\nconst data = {\n  employeeId: $input.first().json.employeeId,\n  employeeEmail: $input.first().json.employeeEmail || '',\n  supervisorEmail: $input.first().json.supervisorEmail,\n  reason: $input.first().json.reason || 'Termination',\n  ticketNumber: $input.first().json.ticketNumber || '',\n  timestamp: new Date().toISOString()\n};\n\nreturn [data];"
+      },
+      "id": "validate-input",
+      "name": "Validate Input & Prepare Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.microsoft.com/v1.0/users/{{$json.employeeEmail || $json.employeeId}}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "GET",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "get-m365-user",
+      "name": "Get M365 User",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [650, 300],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "1",
+          "name": "Microsoft Graph OAuth2"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract M365 user details\nconst m365User = $input.first().json;\nconst previousData = $('Validate Input & Prepare Data').first().json;\n\nreturn [{\n  ...previousData,\n  m365UserId: m365User.id,\n  userPrincipalName: m365User.userPrincipalName,\n  displayName: m365User.displayName,\n  mail: m365User.mail,\n  department: m365User.department,\n  jobTitle: m365User.jobTitle\n}];"
+      },
+      "id": "extract-m365-details",
+      "name": "Extract M365 Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "baseDN": "DC=insulationsinc,DC=local",
+        "searchFilter": "=(|(sAMAccountName={{$json.employeeId}})(mail={{$json.employeeEmail}}))",
+        "returnAttributes": "sAMAccountName,dn,memberOf,mail,displayName"
+      },
+      "id": "search-ad-user",
+      "name": "Search AD User",
+      "type": "n8n-nodes-base.ldap",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "credentials": {
+        "ldap": {
+          "id": "2",
+          "name": "Active Directory"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.microsoft.com/v1.0/users/{{$json.m365UserId}}/mailboxSettings",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "PATCH",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "@odata.type",
+              "value": "microsoft.graph.mailboxSettings"
+            },
+            {
+              "name": "isResourceAccount",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "convert-mailbox",
+      "name": "Convert Mailbox to Shared",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 200],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "1",
+          "name": "Microsoft Graph OAuth2"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.microsoft.com/v1.0/users/{{$json.m365UserId}}/licenseDetails",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "GET"
+      },
+      "id": "get-licenses",
+      "name": "Get Current Licenses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 350],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "1",
+          "name": "Microsoft Graph OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.microsoft.com/v1.0/users/{{$json.m365UserId}}/assignLicense",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"addLicenses\": [], \"removeLicenses\": {{$json.value.map(l => l.skuId)}}}"
+      },
+      "id": "remove-licenses",
+      "name": "Remove M365 Licenses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1450, 350],
+      "credentials": {
+        "oAuth2Api": {
+          "id": "1",
+          "name": "Microsoft Graph OAuth2"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "command": "powershell.exe",
+        "arguments": "=-File C:\\Scripts\\Terminate-Employee.ps1 -EmployeeId {{$json.employeeId}} -SupervisorEmail {{$json.supervisorEmail}} -Reason \"{{$json.reason}}\" -TicketNumber \"{{$json.ticketNumber}}\"",
+        "cwd": "C:\\Scripts"
+      },
+      "id": "execute-termination",
+      "name": "Execute Termination Script",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [1650, 300],
+      "credentials": {
+        "sshPrivateKey": {
+          "id": "3",
+          "name": "DC-PowerShell-Automation"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse PowerShell output\nconst output = $input.first().json;\nlet result = {\n  success: false,\n  message: '',\n  details: {}\n};\n\ntry {\n  // Check if output contains success indicators\n  if (output.stdout && output.stdout.includes('SUCCESS')) {\n    result.success = true;\n    result.message = 'Employee termination completed successfully';\n    \n    // Parse any JSON output from PowerShell\n    const jsonMatch = output.stdout.match(/{[^}]+}/);\n    if (jsonMatch) {\n      result.details = JSON.parse(jsonMatch[0]);\n    }\n  } else {\n    result.message = 'Termination script executed but may have encountered issues';\n    result.details = {\n      stdout: output.stdout,\n      stderr: output.stderr\n    };\n  }\n} catch (error) {\n  result.message = 'Error parsing termination script output';\n  result.error = error.message;\n}\n\nreturn [result];"
+      },
+      "id": "parse-results",
+      "name": "Parse Termination Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{JSON.stringify($json)}}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2050, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{JSON.stringify({error: true, message: $json.message || 'An error occurred during termination', details: $json})}}",
+        "options": {
+          "responseCode": 500,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1450, 600]
+    },
+    {
+      "parameters": {
+        "channel": "#it-notifications",
+        "text": "=Employee Termination Completed\n• Employee: {{$json.displayName}} ({{$json.employeeId}})\n• Status: {{$json.success ? '✅ Success' : '⚠️ Completed with warnings'}}\n• Timestamp: {{$json.timestamp}}",
+        "otherOptions": {
+          "sendAsUser": "n8n Bot"
+        }
+      },
+      "id": "notify-slack",
+      "name": "Notify Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [2250, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "4",
+          "name": "Slack"
+        }
+      },
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input & Prepare Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input & Prepare Data": {
+      "main": [
+        [
+          {
+            "node": "Get M365 User",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get M365 User": {
+      "main": [
+        [
+          {
+            "node": "Extract M365 Details",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract M365 Details": {
+      "main": [
+        [
+          {
+            "node": "Search AD User",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search AD User": {
+      "main": [
+        [
+          {
+            "node": "Convert Mailbox to Shared",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Mailbox to Shared": {
+      "main": [
+        [
+          {
+            "node": "Get Current Licenses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Current Licenses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current Licenses": {
+      "main": [
+        [
+          {
+            "node": "Remove M365 Licenses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove M365 Licenses": {
+      "main": [
+        [
+          {
+            "node": "Execute Termination Script",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Execute Termination Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Termination Script": {
+      "main": [
+        [
+          {
+            "node": "Parse Termination Results",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Termination Results": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Success": {
+      "main": [
+        [
+          {
+            "node": "Notify Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "errorWorkflow": "",
+    "timezone": "America/New_York"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HR",
+      "createdAt": "2025-11-03T00:00:00.000Z"
+    },
+    {
+      "name": "Critical",
+      "createdAt": "2025-11-03T00:00:00.000Z"
+    }
+  ],
+  "active": false,
+  "versionId": "1",
+  "meta": {
+    "instanceId": "n8n-prod"
+  }
+}

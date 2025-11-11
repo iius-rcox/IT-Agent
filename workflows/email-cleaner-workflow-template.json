@@ -1,0 +1,144 @@
+{
+  "name": "Email Cleaner - Template",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 10 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 50,
+        "additionalFields": {
+          "filter": "isRead eq true and receivedDateTime lt @{pastDate}",
+          "select": "id,subject,receivedDateTime,from"
+        }
+      },
+      "id": "get-old-emails",
+      "name": "Get Old Emails",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "1",
+          "name": "Microsoft Outlook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "dateTime": [
+            {
+              "value1": "={{$json[\"receivedDateTime\"]}}",
+              "operation": "isOlderThan",
+              "value2": 30,
+              "unit": "days"
+            }
+          ]
+        }
+      },
+      "id": "filter-30-days",
+      "name": "Filter > 30 Days Old",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "delete",
+        "messageId": "={{$json[\"id\"]}}"
+      },
+      "id": "delete-email",
+      "name": "Delete Email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [850, 280],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "1",
+          "name": "Microsoft Outlook"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "move",
+        "messageId": "={{$json[\"id\"]}}",
+        "folderId": "Archive"
+      },
+      "id": "archive-email",
+      "name": "Archive Email",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [850, 420],
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "1",
+          "name": "Microsoft Outlook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 10 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Get Old Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Old Emails": {
+      "main": [
+        [
+          {
+            "node": "Filter > 30 Days Old",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter > 30 Days Old": {
+      "main": [
+        [
+          {
+            "node": "Delete Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Archive Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

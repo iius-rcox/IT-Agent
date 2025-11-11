@@ -1,0 +1,166 @@
+import ast
+import json
+import re
+from qdrant_client import QdrantClient
+from supabase import create_client, Client
+
+# ------------------------------------------------------------
+# 1. Configuration
+# ------------------------------------------------------------
+QDRANT_URL = "http://10.0.4.2:6333"          # or your remote Qdrant URL
+QDRANT_API_KEY = "A1eitIiTZ6#IooLHyDwN7%V9V" # paste your Qdrant API key here
+QDRANT_COLLECTION = "emails"                 # name of your collection
+SUPABASE_URL = "https://xmziovusqlmgygcrgyqt.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtemlvdnVzcWxtZ3lnY3JneXF0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2Mjc3NjMxOSwiZXhwIjoyMDc4MzUyMzE5fQ.XEb4kGiDNTukQ--VcrIt1bpCatdP25cNDHlNJ2lgVFQ"
+
+# ------------------------------------------------------------
+# 2. Initialize Clients
+# ------------------------------------------------------------
+qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ------------------------------------------------------------
+# 3. Fetch All Points from Qdrant
+# ------------------------------------------------------------
+all_points = []
+next_offset = None
+while True:
+    scroll_result = qdrant.scroll(
+        collection_name=QDRANT_COLLECTION,
+        offset=next_offset,
+        limit=100,
+        with_payload=True,
+        with_vectors=True
+    )
+    retrieved_points, next_offset = scroll_result
+    all_points.extend(retrieved_points)
+    if next_offset is None:
+        break
+
+print(f"Fetched {len(all_points)} points from Qdrant")
+
+# ------------------------------------------------------------
+# 4. Transform Points to Supabase Rows
+# ------------------------------------------------------------
+rows = []
+for point in all_points:
+    payload = point.payload or {}
+    metadata = payload.get("metadata", {})
+
+    # Parse content JSON correctly (it's escaped JSON string)
+    content_json = {}
+    raw_content = payload.get("content")
+    if isinstance(raw_content, str):
+        try:
+            content_json = json.loads(raw_content)
+        except json.JSONDecodeError:
+            try:
+                # Sometimes content is double-escaped
+                content_json = json.loads(json.loads(raw_content))
+            except Exception:
+                pass
+    elif isinstance(raw_content, dict):
+        content_json = raw_content
+
+    # Extract email details
+    subject = content_json.get("subject")
+    if not subject and isinstance(raw_content, str):
+        match = re.search(r'"subject"\s*:\s*"([^"]*)"', raw_content)
+        if match:
+            subject = match.group(1)
+
+    email_text = content_json.get("summary") or content_json.get("text")
+    if not email_text and isinstance(raw_content, str):
+        match = re.search(r'"summary"\s*:\s*"([^"]*)"', raw_content)
+        if match:
+            email_text = match.group(1)
+
+    # 'from' and 'to' are JSON-encoded lists of dicts
+    def format_address_list(value):
+        if not value:
+            return []
+
+        original_value = value
+        if isinstance(value, str):
+            for parser in (json.loads, ast.literal_eval):
+                try:
+                    value = parser(value)
+                    break
+                except Exception:
+                    value = None
+            if value is None:
+                return [original_value]
+
+        if isinstance(value, dict):
+            value = [value]
+
+        if isinstance(value, list):
+            formatted = []
+            for item in value:
+                if isinstance(item, dict):
+                    name = (item.get("name") or "").strip()
+                    address = (item.get("address") or "").strip()
+                    if name and address:
+                        formatted.append(f"{name} <{address}>")
+                    elif address:
+                        formatted.append(address)
+                    elif name:
+                        formatted.append(name)
+                elif item:
+                    formatted.append(str(item))
+
+            return formatted
+
+        return [str(value)]
+
+    from_field = format_address_list(content_json.get("from"))
+    to_field = format_address_list(content_json.get("to"))
+
+    # Parse labels
+    labels = metadata.get("labels")
+    if isinstance(labels, str):
+        try:
+            labels = json.loads(labels)
+        except Exception:
+            labels = [labels]
+
+    # Parse attachments
+    attachments = metadata.get("attachments")
+    if isinstance(attachments, str):
+        try:
+            attachments = json.loads(attachments)
+        except Exception:
+            attachments = []
+
+    # Determine email_id (Qdrant uses short alphanumeric IDs)
+    email_id = metadata.get("id") or metadata.get("thread_id") or metadata.get("message_id")
+    if not email_id:
+        email_id = None
+
+    # Construct record for Supabase
+    record = {
+        "email_id": email_id,
+        "email_subject": subject,
+        "email_text": email_text,
+        "email_labels": labels,
+        "email_received_date": metadata.get("received_date"),
+        "ai_category": metadata.get("category"),
+        "action_taken": metadata.get("action_taken"),
+        "outcome": None,
+        "email_attachments": attachments,
+        "email_to": to_field,
+        "email_from": from_field,
+        "embedding": point.vector,
+    }
+    rows.append(record)
+
+# ------------------------------------------------------------
+# 5. Insert into Supabase (in batches)
+# ------------------------------------------------------------
+BATCH_SIZE = 100
+for i in range(0, len(rows), BATCH_SIZE):
+    batch = rows[i:i + BATCH_SIZE]
+    data, count = supabase.table("emails").insert(batch).execute()
+    print(f"Inserted batch {i//BATCH_SIZE + 1}, {len(batch)} rows")
+
+print("✅ Migration complete!")

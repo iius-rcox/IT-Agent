@@ -3,7 +3,8 @@
     "allow": [
       "mcp__archon__find_projects",
       "mcp__archon__find_tasks",
-      "Bash(kubectl get:*)"
+      "Bash(kubectl get:*)",
+      "mcp__n8n-mcp__n8n_health_check"
     ],
     "deny": [],
     "ask": []
