@@ -15,6 +15,33 @@ __pycache__/
 # Local AI / tooling config
 .claude/
 
+# Files with secrets/credentials
+migrate.py
+*_local.py
+*_local.ps1
+*_local.sh
+*_secrets.py
+*_secrets.ps1
+*_secrets.sh
+*_credentials.py
+*_credentials.ps1
+*_credentials.sh
+*config.local.*
+*config.secrets.*
+*credentials.local.*
+*.local.json
+*.secrets.json
+*.credentials.json
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Connection/config files with sensitive data
+*connection*.local.*
+*settings.local.*
+*secrets.local.*
+
 # Azure CLI outputs created during reviews
 aks.cluster.json
 aks.nodepools.json

@@ -1,17 +1,18 @@
-import ast
 import json
 import re
 from qdrant_client import QdrantClient
 from supabase import create_client, Client
+import os
 
 # ------------------------------------------------------------
 # 1. Configuration
 # ------------------------------------------------------------
-QDRANT_URL = "http://10.0.4.2:6333"          # or your remote Qdrant URL
-QDRANT_API_KEY = "A1eitIiTZ6#IooLHyDwN7%V9V" # paste your Qdrant API key here
-QDRANT_COLLECTION = "emails"                 # name of your collection
-SUPABASE_URL = "https://xmziovusqlmgygcrgyqt.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtemlvdnVzcWxtZ3lnY3JneXF0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2Mjc3NjMxOSwiZXhwIjoyMDc4MzUyMzE5fQ.XEb4kGiDNTukQ--VcrIt1bpCatdP25cNDHlNJ2lgVFQ"
+# Load from environment variables or set here (NOT RECOMMENDED)
+QDRANT_URL = os.getenv("QDRANT_URL", "http://your-qdrant-server:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")  # Set via environment variable
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "emails")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://your-project.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")  # Set via environment variable
 
 # ------------------------------------------------------------
 # 2. Initialize Clients
@@ -82,14 +83,21 @@ for point in all_points:
 
         original_value = value
         if isinstance(value, str):
-            for parser in (json.loads, ast.literal_eval):
+            try:
+                import ast
+                for parser in (json.loads, ast.literal_eval):
+                    try:
+                        value = parser(value)
+                        break
+                    except Exception:
+                        value = None
+                if value is None:
+                    return [original_value]
+            except ImportError:
                 try:
-                    value = parser(value)
-                    break
+                    value = json.loads(value)
                 except Exception:
-                    value = None
-            if value is None:
-                return [original_value]
+                    return [original_value]
 
         if isinstance(value, dict):
             value = [value]
@@ -164,3 +172,4 @@ for i in range(0, len(rows), BATCH_SIZE):
     print(f"Inserted batch {i//BATCH_SIZE + 1}, {len(batch)} rows")
 
 print("✅ Migration complete!")
+
