@@ -327,12 +327,12 @@ class SQLServerHealthCheck:
             type_desc AS FileType,
             name AS FileName,
             physical_name AS Path,
-            size * 8 / 1024.0 AS SizeMB,
+            CAST(size AS BIGINT) * 8 / 1024.0 AS SizeMB,
             CASE max_size
                 WHEN -1 THEN 'Unlimited'
-                ELSE CAST(max_size * 8 / 1024.0 AS VARCHAR(20))
+                ELSE CAST(CAST(max_size AS BIGINT) * 8 / 1024.0 AS VARCHAR(20))
             END AS MaxSizeMB,
-            growth * 8 / 1024.0 AS GrowthMB
+            CAST(growth AS BIGINT) * 8 / 1024.0 AS GrowthMB
         FROM sys.master_files
         WHERE database_id > 4  -- Exclude system databases
         ORDER BY database_id, type_desc
@@ -435,7 +435,7 @@ class SQLServerHealthCheck:
         SELECT TOP 20
             s.name AS SchemaName,
             t.name AS TableName,
-            p.rows AS RowCount,
+            p.rows AS RowCnt,
             SUM(a.total_pages) * 8 / 1024.0 AS TotalSpaceMB,
             SUM(a.used_pages) * 8 / 1024.0 AS UsedSpaceMB,
             CASE
@@ -459,9 +459,9 @@ class SQLServerHealthCheck:
         if tables:
             print("\n[Tables that may cause timeout issues]")
             for t in tables[:10]:
-                print(f"{t.SchemaName}.{t.TableName}: {t.RowCount:,} rows ({t.SizeCategory})")
+                print(f"{t.SchemaName}.{t.TableName}: {t.RowCnt:,} rows ({t.SizeCategory})")
                 print(f"  Size: {t.TotalSpaceMB:.1f} MB")
-                if t.RowCount > 10000000:
+                if t.RowCnt > 10000000:
                     print("  [WARNING] Very large table - queries need proper indexing!")
 
     def check_missing_indexes(self):
